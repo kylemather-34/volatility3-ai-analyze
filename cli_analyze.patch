@@ -1,0 +1,110 @@
+diff --git a/volatility3/cli/__init__.py b/volatility3/cli/__init__.py
+index 15e6cc7b..ce481596 100644
+--- a/volatility3/cli/__init__.py
++++ b/volatility3/cli/__init__.py
+@@ -23,6 +23,8 @@ import traceback
+ from typing import Any, Dict, List, Optional, Tuple, Type, Union
+ from urllib import parse, request
+ 
++from volatility3.framework.ai_analysis import AIAnalyzer, run_analysis, resolve_api_key
++
+ try:
+     import argcomplete
+ 
+@@ -248,7 +250,6 @@ class CommandLine:
+             nargs="*",
+             type=str,
+         )
+-
+         parser.set_defaults(**default_config)
+ 
+         # We have to filter out help, otherwise parse_known_args will trigger the help message before having
+@@ -379,6 +380,39 @@ class CommandLine:
+                 epilog=additional_help,
+             )
+             self.populate_requirements_argparse(plugin_parser, plugin_list[plugin])
++            # AI analysis flags — added to every plugin subparser so the user
++            # can append --analyze naturally at the end of any command, e.g.:
++            #   python3 vol.py -f image.vmem windows.pslist --analyze
++            # API key can also be set via the GROQ_API_KEY environment variable.
++            plugin_parser.add_argument(
++                "--analyze",
++                help=(
++                    "Pass this plugin's output to the Groq API for AI-powered forensic "
++                    "analysis. Requires a Groq API key (free at console.groq.com). "
++                    "Set GROQ_API_KEY env var or use --api-key."
++                ),
++                default=False,
++                action="store_true",
++            )
++            plugin_parser.add_argument(
++                "--api-key",
++                help=(
++                    "Groq API key for --analyze. Falls back to the GROQ_API_KEY "
++                    "environment variable if not provided."
++                ),
++                default=None,
++                type=str,
++            )
++            plugin_parser.add_argument(
++                "--model",
++                help=(
++                    f"Groq model name to use for --analyze "
++                    f"(default: {AIAnalyzer.DEFAULT_MODEL}). "
++                    "Other options: qwen-qwq-32b, llama-3.1-8b-instant"
++                ),
++                default=AIAnalyzer.DEFAULT_MODEL,
++                type=str,
++            )
+ 
+         ###
+         # PASS TO UI
+@@ -519,7 +553,47 @@ class CommandLine:
+                 renderer = renderers[args.renderer]()
+                 renderer.filter = text_filter.CLIFilter(grid, args.filters)
+                 renderer.column_hide_list = args.hide_columns
+-                renderer.render(grid)
++
++                if getattr(args, "analyze", False):
++                    # --analyze mode: capture the renderer's stdout so we can
++                    # feed it to the Groq API after normal output is printed.
++                    api_key = resolve_api_key(getattr(args, "api_key", None))
++                    if not api_key:
++                        sys.stderr.write(
++                            "\n[AI Analysis Error] No API key found.\n"
++                            "Set GROQ_API_KEY in your environment, or pass --api-key <key>.\n"
++                            "Get a free key at https://console.groq.com\n\n"
++                        )
++                        renderer.render(grid)
++                    else:
++                        captured_buf = io.StringIO()
++                        real_stdout = sys.stdout
++
++                        class _TeeStream(io.TextIOBase):
++                            """Forwards writes to both stdout and a capture buffer."""
++                            def write(self, s: str) -> int:
++                                real_stdout.write(s)
++                                captured_buf.write(s)
++                                return len(s)
++
++                            def flush(self):
++                                real_stdout.flush()
++
++                        sys.stdout = _TeeStream()
++                        try:
++                            renderer.render(grid)
++                        finally:
++                            sys.stdout = real_stdout
++
++                        run_analysis(
++                            plugin_name=args.plugin,
++                            plugin_output=captured_buf.getvalue(),
++                            api_key=api_key,
++                            model=getattr(args, "model", AIAnalyzer.DEFAULT_MODEL),
++                        )
++                else:
++                    renderer.render(grid)
++
+         except exceptions.VolatilityException as excp:
+             self.process_exceptions(excp)
+ 
