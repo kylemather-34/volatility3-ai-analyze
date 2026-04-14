@@ -61,7 +61,7 @@ No extra Python packages are needed — the API call uses Python's built-in `url
 Clone this repo, then run the install script from the root of your volatility3 directory:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/volatility3-ai-analyze.git
+git clone https://github.com/kylemather-34/volatility3-ai-analyze.git
 cd /path/to/your/volatility3
 bash /path/to/volatility3-ai-analyze/install.sh
 ```
